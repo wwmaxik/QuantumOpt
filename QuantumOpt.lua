@@ -2,10 +2,10 @@
 --- MOD_NAME: QuantumOpt
 --- MOD_ID: QuantumOpt
 --- MOD_AUTHOR: [wwmaxik]
---- MOD_DESCRIPTION: Высокопроизводительный Rust-нативный мод для плавных 60 FPS при 100+ джокерах и 100+ расходниках, Cryptid и Talisman.
+--- MOD_DESCRIPTION: [BETA] Высокопроизводительный Rust-нативный мод для плавных 60 FPS при 100+ джокерах и 100+ расходниках, Cryptid и Talisman.
 --- BADGE_COLOUR: 00b4d8
 --- PREFIX: qopt
---- VERSION: 1.4.0
+--- VERSION: 1.4.0-beta
 --- PRIORITY: 1000
 
 QuantumOpt = SMODS.current_mod or {}
@@ -597,7 +597,7 @@ QuantumOpt.config_tab = function()
         config = { align = "cm", padding = 0.2, colour = G.C.BLACK, r = 0.1, minw = 8, minh = 6 },
         nodes = {
             { n = G.UIT.R, config = { align = "cm", padding = 0.1 }, nodes = {
-                { n = G.UIT.T, config = { text = "QuantumOpt — Оптимизация Balatro v1.4.0 (Rust Core)", scale = 0.5, colour = G.C.GOLD } }
+                { n = G.UIT.T, config = { text = "QuantumOpt — Оптимизация Balatro v1.4.0-beta [Rust Core]", scale = 0.5, colour = G.C.GOLD } }
             }},
             { n = G.UIT.R, config = { align = "cl", padding = 0.05 }, nodes = {
                 create_toggle({ label = "Rust Core (libquantum_core.so вычисления)", ref_table = QuantumOpt.config, ref_value = "rust_core" })
@@ -642,4 +642,4 @@ QuantumOpt.config_tab = function()
     }
 end
 
-sendInfoMessage("QuantumOpt v1.4.0 (Rust Core) successfully loaded!", "QuantumOpt")
+sendInfoMessage("QuantumOpt v1.4.0-beta (Rust Core) successfully loaded!", "QuantumOpt")

@@ -510,6 +510,99 @@ mod tests {
     }
 
     #[test]
+    fn test_omega_add() {
+        let a = TalismanOmega::from_f64(50.0);
+        let b = TalismanOmega::from_f64(75.0);
+        let mut out = TalismanOmega::zero();
+        unsafe {
+            quantum_omega_add(&a, &b, &mut out);
+        }
+        assert_eq!(out.number, 125.0);
+        assert_eq!(out.asize, 1.0);
+
+        // Large towers addition (10^100 + 10^20 -> 10^100 dominates)
+        let big_a = TalismanOmega { asize: 2.0, number: 100.0, sign: 1, _nan: false, _inf: false };
+        let big_b = TalismanOmega { asize: 2.0, number: 20.0, sign: 1, _nan: false, _inf: false };
+        unsafe {
+            quantum_omega_add(&big_a, &big_b, &mut out);
+        }
+        assert_eq!(out.number, 100.0);
+        assert_eq!(out.asize, 2.0);
+    }
+
+    #[test]
+    fn test_omega_pow() {
+        let a = TalismanOmega::from_f64(10.0);
+        let b = TalismanOmega::from_f64(3.0);
+        let mut out = TalismanOmega::zero();
+        unsafe {
+            quantum_omega_pow(&a, &b, &mut out);
+        }
+        assert_eq!(out.number, 1000.0);
+        assert_eq!(out.asize, 1.0);
+    }
+
+    #[test]
+    fn test_omega_cmp() {
+        let a = TalismanOmega::from_f64(500.0);
+        let b = TalismanOmega::from_f64(200.0);
+        unsafe {
+            assert_eq!(quantum_omega_cmp(&a, &b), 1);
+            assert_eq!(quantum_omega_cmp(&b, &a), -1);
+            assert_eq!(quantum_omega_cmp(&a, &a), 0);
+        }
+    }
+
+    #[test]
+    fn test_omega_edge_cases() {
+        let zero = TalismanOmega::zero();
+        let num = TalismanOmega::from_f64(42.0);
+        let mut out = TalismanOmega::zero();
+        unsafe {
+            quantum_omega_mul(&zero, &num, &mut out);
+            assert_eq!(out.number, 0.0);
+            assert_eq!(out.asize, 0.0);
+
+            quantum_omega_add(&zero, &num, &mut out);
+            assert_eq!(out.number, 42.0);
+            assert_eq!(out.asize, 1.0);
+        }
+    }
+
+    #[test]
+    fn test_step_xy() {
+        let mut vtx = 0.0_f32;
+        let mut vty = 0.0_f32;
+        let mut vx = 0.0_f32;
+        let mut vy = 0.0_f32;
+        let mut stationary = true;
+
+        unsafe {
+            quantum_step_xy(100.0, 50.0, &mut vtx, &mut vty, &mut vx, &mut vy, 0.016, 0.5, 5.0, &mut stationary);
+        }
+        assert!(!stationary);
+        assert!(vtx > 0.0);
+        assert!(vty > 0.0);
+    }
+
+    #[test]
+    fn test_batch_step_moveables() {
+        let mut items = vec![CMoveable {
+            tx: 100.0, ty: 50.0, tw: 20.0, th: 30.0, tr: 0.0, tscale: 1.0,
+            vtx: 0.0, vty: 0.0, vtw: 20.0, vth: 30.0, vtr: 0.0, vtscale: 1.0,
+            vx: 0.0, vy: 0.0, vr: 0.0, vscale: 0.0,
+            pinch_x: false, pinch_y: false, stationary: true,
+            shadow_px: 0.0, extra_scale: 0.0, extra_r: 0.0,
+        }];
+
+        unsafe {
+            quantum_batch_step_moveables(items.as_mut_ptr(), items.len(), 0.016, 0.5, 0.5, 0.5, 5.0, 1920.0);
+        }
+        assert!(!items[0].stationary);
+        assert!(items[0].vtx > 0.0);
+    }
+
+    #[test]
     fn test_point_collision() {
         let rect = CRect { x: 10.0, y: 10.0, w: 50.0, h: 50.0, r: 0.0 };
         unsafe {
@@ -518,3 +611,4 @@ mod tests {
         }
     }
 }
+
