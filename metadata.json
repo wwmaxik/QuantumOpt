@@ -1,0 +1,14 @@
+{
+    "id": "QuantumOpt",
+    "name": "QuantumOpt",
+    "display_name": "QuantumOpt (FPS & Endless Optimizer)",
+    "author": ["wwmaxik"],
+    "version": "1.3.0",
+    "description": "Максимальная оптимизация FPS: ликвидация смертельного цикла nuGC (full collect при >300MB), Thin-Draw для сотен карт, турбо-скоринг.",
+    "prefix": "qopt",
+    "main_file": "QuantumOpt.lua",
+    "priority": 1000,
+    "badge_colour": "00b4d8",
+    "badge_text_colour": "ffffff",
+    "dependencies": []
+}
