@@ -1,10 +1,10 @@
 {
     "id": "QuantumOpt",
     "name": "QuantumOpt",
-    "display_name": "QuantumOpt (Rust Core FPS Optimizer) [BETA]",
+    "display_name": "QuantumOpt (Instant Scoring & Rust Core 60 FPS) [BETA]",
     "author": ["wwmaxik"],
     "version": "1.4.0-beta",
-    "description": "[BETA] Высокопроизводительный оптимизатор FPS на Rust (libquantum_core.so): ускоряет кинематику сотен карт (SIMD), устраняет смертельный цикл nuGC (>300MB), кэширует коллизии.",
+    "description": "[BETA] Мгновенный подсчет очков и оптимизация 60 FPS на Rust (libquantum_core.so): устраняет 22,500 O(N^2) вызовов other_joker, срезает задержки очереди событий, оптимизирует Talisman/Amulet, устраняет цикл nuGC.",
     "prefix": "qopt",
     "main_file": "QuantumOpt.lua",
     "priority": 1000,

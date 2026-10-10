@@ -2,7 +2,7 @@
 --- MOD_NAME: QuantumOpt
 --- MOD_ID: QuantumOpt
 --- MOD_AUTHOR: [wwmaxik]
---- MOD_DESCRIPTION: [BETA] Высокопроизводительный Rust-нативный мод для плавных 60 FPS при 100+ джокерах и 100+ расходниках, Cryptid и Talisman.
+--- MOD_DESCRIPTION: [BETA] Мгновенный подсчет очков и Rust-нативная оптимизация 60 FPS для Balatro при 150+ джокерах, Cryptid и Talisman.
 --- BADGE_COLOUR: 00b4d8
 --- PREFIX: qopt
 --- VERSION: 1.4.0-beta
@@ -12,20 +12,22 @@ QuantumOpt = SMODS.current_mod or {}
 
 -- Конфигурация по умолчанию
 local default_config = {
+    instant_scoring = true,     -- Мгновенный подсчет очков (срезает задержки очереди событий до 0.001с)
+    filter_other_jokers = true, -- Устранение O(N^2) цикла other_joker (пропуск 22,500 лишних вызовов eval_card)
+    talisman_instant = true,    -- Мгновенный счет Talisman/Amulet (framecalc = 100000, disable_anims = true)
+    turbo_scoring = true,       -- Турбо-дрейн очереди EventManager (до 25 событий за кадр во время счета)
     rust_core = true,           -- Использовать Rust нативную библиотеку libquantum_core.so
     rust_physics = true,        -- Быстрая SIMD физика перемещений карт на Rust
     cache_collisions = true,    -- Кэширование коллизий курсора (устраняет проверку 2000+ узлов при неподвижной мыши)
-    throttle_joker_checks = true, -- Устранение O(N^2) циклов джокеров (Temperance, Stencil, Driver's License)
+    throttle_joker_checks = true, -- Кэширование пассивных джокеров (Temperance, Stencil, Driver's License)
     fix_nugc = true,            -- Устранение смертельного цикла nuGC (full collect при >300MB)
     cull_cards = true,          -- Thin-Draw и срез тяжелых шейдеров для 100+ перекрытых карт
     optimize_cards = true,      -- Оптимизация обновлений и физики 300+ карт
-    turbo_scoring = true,       -- Ускорение подсчета очков (срезает долгие задержки между триггерами)
-    fast_easing = true,         -- Быстрое обновление счетчиков очков без микрофризов
+    fast_easing = true,         -- Мгновенное обновление счетчиков очков без микрофризов
     suppress_jiggle = true,     -- Подавление тряски экрана при астрономических очках
     audio_limiter = true,       -- Защита звукового буфера OpenAL от спама одинаковых звуков
     show_fps = true,            -- Аккуратный счетчик FPS в углу экрана с подробной диагностикой
     simple_background = false,  -- Упрощенный фон (для слабых GPU)
-    talisman_instant = false,   -- Включить режим мгновенного счета Talisman (если установлен)
 }
 
 QuantumOpt.config = QuantumOpt.config or {}
@@ -47,50 +49,21 @@ local function init_rust_core()
     if not QuantumOpt.config.rust_core then return end
 
     pcall(ffi.cdef, [[
-        struct TalismanOmega {
-            double asize;
-            double number;
-            int8_t sign;
-            bool _nan;
-            bool _inf;
-        };
+        int quantum_init();
+        double quantum_get_time();
     ]])
 
     pcall(ffi.cdef, [[
-        struct CMoveable {
-            float tx, ty, tw, th, tr, tscale;
-            float vtx, vty, vtw, vth, vtr, vtscale;
-            float vx, vy, vr, vscale;
-            bool pinch_x, pinch_y, stationary;
-            float shadow_px, extra_scale, extra_r;
-        };
+        void quantum_step_xy(float tx, float ty, float* vtx, float* vty, float* vx, float* vy, float dt, float exp_xy, float max_vel, bool* out_stationary);
     ]])
 
     pcall(ffi.cdef, [[
         struct CRect {
             float x, y, w, h, r;
         };
-    ]])
-
-    local cdef_ok, cdef_err = pcall(ffi.cdef, [[
-        int quantum_init();
-        double quantum_get_time();
-
-        void quantum_omega_mul(const struct TalismanOmega* a, const struct TalismanOmega* b, struct TalismanOmega* out);
-        void quantum_omega_add(const struct TalismanOmega* a, const struct TalismanOmega* b, struct TalismanOmega* out);
-        void quantum_omega_pow(const struct TalismanOmega* a, const struct TalismanOmega* b, struct TalismanOmega* out);
-        int quantum_omega_cmp(const struct TalismanOmega* a, const struct TalismanOmega* b);
-
-        void quantum_batch_step_moveables(struct CMoveable* items, size_t count, float dt, float exp_xy, float exp_scale, float exp_r, float max_vel, float room_w);
-        void quantum_step_xy(float tx, float ty, float* vtx, float* vty, float* vx, float* vy, float dt, float exp_xy, float max_vel, bool* out_stationary);
-
         bool quantum_point_in_rect(const struct CRect* r, float px, float py, float buffer);
         size_t quantum_batch_point_collision(const struct CRect* rects, size_t count, float px, float py, float buffer, int32_t* out_indices, size_t max_out);
     ]])
-
-    if not cdef_ok then
-        sendWarnMessage("[QuantumOpt] ffi.cdef error: " .. tostring(cdef_err), "QuantumOpt")
-    end
 
     local candidates = {
         (SMODS and SMODS.current_mod and SMODS.current_mod.path) and (SMODS.current_mod.path .. "libquantum_core.so"),
@@ -98,7 +71,6 @@ local function init_rust_core()
         (love and love.filesystem and love.filesystem.getSaveDirectory) and (love.filesystem.getSaveDirectory() .. "/Mods/QuantumOpt/libquantum_core.so"),
         "/home/wwmaxik/.local/share/balatro/Mods/QuantumOpt/libquantum_core.so",
         "/home/wwmaxik/QuantumOpt/libquantum_core.so",
-        "/home/wwmaxik/quantum-core/target/release/libquantum_core.so",
         "./libquantum_core.so",
         "libquantum_core.so"
     }
@@ -115,8 +87,6 @@ local function init_rust_core()
                     pcall(function() QuantumLib.quantum_init() end)
                     sendInfoMessage("[QuantumOpt] Native Rust core loaded successfully from: " .. path, "QuantumOpt")
                     break
-                else
-                    sendWarnMessage("[QuantumOpt] Library found at " .. path .. " but symbol resolution failed.", "QuantumOpt")
                 end
             end
         end
@@ -139,6 +109,124 @@ if QuantumOpt.config.fix_nugc then
     collectgarbage("restart")
     pcall(collectgarbage, "setpause", 200)
     pcall(collectgarbage, "setstepmul", 200)
+end
+
+-- =========================================================================
+-- 2. УСКОРЕНИЕ ВЫЧИСЛЕНИЙ ПОДСЧЕТА И УСТРАНЕНИЕ O(N^2) OTHER_JOKER
+-- =========================================================================
+-- При 150+ джокерах vanilla и SMODS вызывают eval_card для каждого джокера против
+-- каждого другого джокера (150 * 150 = 22,500 вызовов на каждый триггер карты!).
+-- 99% джокеров никогда не используют context.other_joker. Мы кэшируем и отсекаем их.
+local cares_about_other_cache = {}
+local function card_cares_about_other(card)
+    if not card then return true end
+    if card.debuff then return false end
+    if card.edition and (card.edition.cry_astral or card.edition.key == 'e_cry_astral') then return true end
+
+    local name = card.ability and card.ability.name
+    if name == 'Baseball Card' or name == 'Blueprint' or name == 'Brainstorm' then return true end
+
+    local center = card.config and card.config.center
+    if not center then return true end
+    local key = center.key or name
+    if not key then return true end
+
+    local cached = cares_about_other_cache[key]
+    if cached ~= nil then return cached end
+
+    if type(center.calculate) == 'function' then
+        local ok, dump = pcall(string.dump, center.calculate)
+        if ok and dump then
+            if string.find(dump, "other_joker") or string.find(dump, "other_main") 
+               or string.find(dump, "other_card") or string.find(dump, "other_consumeable") 
+               or string.find(dump, "other_voucher") then
+                cares_about_other_cache[key] = true
+                return true
+            end
+        end
+    end
+
+    cares_about_other_cache[key] = false
+    return false
+end
+
+local orig_eval_card = eval_card
+function eval_card(card, context)
+    if QuantumOpt.config.filter_other_jokers and context and (context.other_joker or context.other_main or context.other_consumeable or context.other_voucher) then
+        if card and card.ability and card.ability.set == 'Joker' then
+            if not card_cares_about_other(card) then
+                return {}, {}
+            end
+        end
+    end
+    return orig_eval_card(card, context)
+end
+
+-- Сжатие искусственных пауз delay(...) до 0.001с во время розыгрыша руки
+local orig_delay = delay
+function delay(time, queue)
+    if (QuantumOpt.config.instant_scoring or QuantumOpt.config.turbo_scoring) and G.STATE == G.STATES.HAND_PLAYED then
+        time = 0.001
+    end
+    return orig_delay(time, queue)
+end
+
+-- Сжатие задержек событий очереди EventManager
+local orig_event_init = Event.init
+function Event:init(config)
+    if (QuantumOpt.config.instant_scoring or QuantumOpt.config.turbo_scoring) and G.STATE == G.STATES.HAND_PLAYED then
+        if config.delay and config.delay > 0.005 then
+            config.delay = 0.002
+        end
+    end
+    return orig_event_init(self, config)
+end
+
+-- Турбо-дрейн очереди событий EventManager: мгновенный сброс триггеров без просадки FPS
+local orig_eman_update = EventManager.update
+function EventManager:update(dt, forced)
+    if (QuantumOpt.config.instant_scoring or QuantumOpt.config.turbo_scoring) and G.STATE == G.STATES.HAND_PLAYED then
+        for _ = 1, 20 do
+            orig_eman_update(self, dt, true)
+            local q = self.queues['base']
+            if not q or #q == 0 then break end
+            if q[1] and q[1].delay and q[1].delay > 0.05 then break end
+        end
+        return
+    end
+    return orig_eman_update(self, dt, forced)
+end
+
+-- Мгновенный вывод статуса очков (card_eval_status_text)
+local orig_card_eval_status_text = card_eval_status_text
+function card_eval_status_text(card, eval_type, amt, percent, dir, extra)
+    if (QuantumOpt.config.instant_scoring or QuantumOpt.config.turbo_scoring) and G.STATE == G.STATES.HAND_PLAYED then
+        if extra then
+            extra.delay = 0.002
+            extra.instant = true
+        else
+            extra = { delay = 0.002, instant = true }
+        end
+    end
+    return orig_card_eval_status_text(card, eval_type, amt, percent, dir, extra)
+end
+
+-- Мгновенная интерполяция чисел (Fast Easing)
+local orig_ease_value = ease_value
+function ease_value(ref_table, ref_value, mod, floored, timer_type, not_blockable, delay, ease_type)
+    if QuantumOpt.config.fast_easing and G.STATE == G.STATES.HAND_PLAYED then
+        delay = 0.01
+    end
+    return orig_ease_value(ref_table, ref_value, mod, floored, timer_type, not_blockable, delay, ease_type)
+end
+
+-- Отключение анимаций вздрагивания карт во время расчета очков
+local orig_card_juice = Card.juice_up
+function Card:juice_up(scale, rot_amt)
+    if QuantumOpt.config.optimize_cards and G.STATE == G.STATES.HAND_PLAYED then
+        return
+    end
+    return orig_card_juice(self, scale, rot_amt)
 end
 
 -- =========================================================================
@@ -192,8 +280,6 @@ end
 -- =========================================================================
 -- 4. КЭШИРОВАНИЕ КОЛЛИЗИЙ КУРСОРА (Controller:get_cursor_collision)
 -- =========================================================================
--- В Balatro при 300+ картах в G.DRAW_HASH скапливается 2000-4000 объектов.
--- Каждый кадр проверялись коллизии даже если мышь стоит на месте.
 local last_cursor_x = -99999
 local last_cursor_y = -99999
 local orig_get_cursor_collision = Controller.get_cursor_collision
@@ -216,16 +302,8 @@ end
 -- =========================================================================
 -- 5. УСТРАНЕНИЕ O(N^2) ТОРМОЗОВ ДЖОКЕРОВ (Temperance, Stencil, Driver's License)
 -- =========================================================================
--- При 150 джокерах проверка каждого джокера перебором всех остальных джокеров
--- дает 22,500 операций каждый кадр (60 раз в секунду). Мы кэшируем эти счетчики.
 local cached_joker_sell_cost = 0
 local cached_joker_sell_frame = -1
-local cached_driver_tally = 0
-local cached_driver_frame = -1
-local cached_steel_tally = 0
-local cached_steel_frame = -1
-local cached_stone_tally = 0
-local cached_stone_frame = -1
 
 local orig_card_update = Card.update
 function Card:update(dt)
@@ -375,37 +453,6 @@ function DynaText:update(dt, real_dt)
     return orig_dynatext_update(self, dt, real_dt)
 end
 
--- =========================================================================
--- 9. ТУРБО-СКОРИНГ И EASING
--- =========================================================================
-local orig_card_eval_status_text = card_eval_status_text
-function card_eval_status_text(card, eval_type, amt, percent, dir, extra)
-    if QuantumOpt.config.turbo_scoring and extra then
-        if extra.delay then
-            extra.delay = math.min(extra.delay, 0.04)
-        else
-            extra.delay = 0.04
-        end
-    end
-    return orig_card_eval_status_text(card, eval_type, amt, percent, dir, extra)
-end
-
-local orig_ease_value = ease_value
-function ease_value(ref_table, ref_value, mod, floored, timer_type, not_blockable, delay, ease_type)
-    if QuantumOpt.config.fast_easing and G.STATE == G.STATES.HAND_PLAYED then
-        delay = 0.03
-    end
-    return orig_ease_value(ref_table, ref_value, mod, floored, timer_type, not_blockable, delay, ease_type)
-end
-
-local orig_card_juice = Card.juice_up
-function Card:juice_up(scale, rot_amt)
-    if QuantumOpt.config.optimize_cards and G.STATE == G.STATES.HAND_PLAYED then
-        return
-    end
-    return orig_card_juice(self, scale, rot_amt)
-end
-
 if SMODS and SMODS.DrawSteps and SMODS.DrawSteps['tilt'] then
     local orig_tilt_step = SMODS.DrawSteps['tilt'].func
     SMODS.DrawSteps['tilt'].func = function(self)
@@ -422,7 +469,7 @@ if SMODS and SMODS.DrawSteps and SMODS.DrawSteps['tilt'] then
 end
 
 -- =========================================================================
--- 10. ЛИМИТЕР ЗВУКОВОГО БУФЕРА
+-- 9. ЛИМИТЕР ЗВУКОВОГО БУФЕРА
 -- =========================================================================
 local sound_timestamps = {}
 local orig_play_sound = play_sound
@@ -440,12 +487,12 @@ function play_sound(sound, pitch, volume)
 end
 
 -- =========================================================================
--- 11. ДИАГНОСТИЧЕСКИЙ ПРОФАЙЛЕР И ОБНОВЛЕНИЕ ИГРЫ
+-- 10. ДИАГНОСТИЧЕСКИЙ ПРОФАЙЛЕР И ОБНОВЛЕНИЕ ИГРЫ
 -- =========================================================================
 local cur_upd_ms = 0
 local t_eman_ms = 0
 
-local orig_eman_update = nil
+local orig_eman_measure = nil
 local orig_game_update = Game.update
 function Game:update(dt)
     if LIGHTSPEED and LIGHTSPEED.config and LIGHTSPEED.config.game_speed then
@@ -454,11 +501,11 @@ function Game:update(dt)
         end
     end
 
-    if not orig_eman_update and self.E_MANAGER then
-        orig_eman_update = self.E_MANAGER.update
+    if not orig_eman_measure and self.E_MANAGER then
+        orig_eman_measure = self.E_MANAGER.update
         self.E_MANAGER.update = function(eman, rdt, forced)
             local t_e0 = love.timer.getTime()
-            local r = orig_eman_update(eman, rdt, forced)
+            local r = orig_eman_measure(eman, rdt, forced)
             t_eman_ms = (love.timer.getTime() - t_e0) * 1000
             return r
         end
@@ -472,9 +519,20 @@ function Game:update(dt)
         end
     end
 
-    if Talisman and Talisman.config_file then
-        if QuantumOpt.config.talisman_instant and not Talisman.config_file.disable_anims then
-            Talisman.config_file.disable_anims = true
+    -- Автоускорение Talisman / Amulet: мгновенный подсчет без ожидания 400 кадров
+    if Talisman then
+        if QuantumOpt.config.talisman_instant then
+            if Talisman.config_file and not Talisman.config_file.disable_anims then
+                Talisman.config_file.disable_anims = true
+            end
+            if Talisman.coroutine then
+                if Talisman.coroutine.framecalc and Talisman.coroutine.framecalc < 50000 then
+                    Talisman.coroutine.framecalc = 100000
+                end
+                if Talisman.coroutine.frametime and Talisman.coroutine.frametime < 1.0 then
+                    Talisman.coroutine.frametime = 5.0
+                end
+            end
         end
     end
 
@@ -484,7 +542,7 @@ function Game:update(dt)
 end
 
 -- =========================================================================
--- 12. РАСШИРЕННЫЙ СЧЕТЧИК FPS (С ИНДИКАТОРОМ RUST CORE)
+-- 11. РАСШИРЕННЫЙ СЧЕТЧИК FPS (С ИНДИКАТОРОМ RUST CORE)
 -- =========================================================================
 local fps_timer = 0
 local cached_fps = 60
@@ -522,7 +580,7 @@ function Game:draw()
 
         local rust_tag = rust_active and "Rust:ON" or "Rust:OFF"
         love.graphics.setColor(0, 0, 0, 0.75)
-        love.graphics.rectangle("fill", 12, 12, 320, 24, 6)
+        love.graphics.rectangle("fill", 12, 12, 330, 24, 6)
 
         love.graphics.setColor(r, g, b, 0.95)
         if G.LANG and G.LANG.font and G.LANG.font.FONT then
@@ -539,7 +597,7 @@ function Game:draw()
 end
 
 -- =========================================================================
--- 13. ВКЛАДКА НАСТРОЕК В МЕНЮ МОДОВ SMODS
+-- 12. ВКЛАДКА НАСТРОЕК В МЕНЮ МОДОВ SMODS
 -- =========================================================================
 QuantumOpt.config_tab = function()
     return {
@@ -547,7 +605,19 @@ QuantumOpt.config_tab = function()
         config = { align = "cm", padding = 0.2, colour = G.C.BLACK, r = 0.1, minw = 8, minh = 6 },
         nodes = {
             { n = G.UIT.R, config = { align = "cm", padding = 0.1 }, nodes = {
-                { n = G.UIT.T, config = { text = "QuantumOpt — Оптимизация Balatro v1.4.0-beta [Rust Core]", scale = 0.5, colour = G.C.GOLD } }
+                { n = G.UIT.T, config = { text = "QuantumOpt — Мгновенный подсчет очков & 60 FPS v1.4.0-beta", scale = 0.5, colour = G.C.GOLD } }
+            }},
+            { n = G.UIT.R, config = { align = "cl", padding = 0.05 }, nodes = {
+                create_toggle({ label = "Мгновенный подсчет очков (срезает искусственные паузы)", ref_table = QuantumOpt.config, ref_value = "instant_scoring" })
+            }},
+            { n = G.UIT.R, config = { align = "cl", padding = 0.05 }, nodes = {
+                create_toggle({ label = "Устранение O(N^2) цикла other_joker (пропуск 22,500 вызовов)", ref_table = QuantumOpt.config, ref_value = "filter_other_jokers" })
+            }},
+            { n = G.UIT.R, config = { align = "cl", padding = 0.05 }, nodes = {
+                create_toggle({ label = "Мгновенный расчет Talisman (framecalc 100k, disable anims)", ref_table = QuantumOpt.config, ref_value = "talisman_instant" })
+            }},
+            { n = G.UIT.R, config = { align = "cl", padding = 0.05 }, nodes = {
+                create_toggle({ label = "Турбо-дрейн очереди EventManager (до 20 событий за кадр)", ref_table = QuantumOpt.config, ref_value = "turbo_scoring" })
             }},
             { n = G.UIT.R, config = { align = "cl", padding = 0.05 }, nodes = {
                 create_toggle({ label = "Rust Core (libquantum_core.so вычисления)", ref_table = QuantumOpt.config, ref_value = "rust_core" })
@@ -559,22 +629,19 @@ QuantumOpt.config_tab = function()
                 create_toggle({ label = "Кэширование коллизий курсора (без спама по 2000 узлов)", ref_table = QuantumOpt.config, ref_value = "cache_collisions" })
             }},
             { n = G.UIT.R, config = { align = "cl", padding = 0.05 }, nodes = {
-                create_toggle({ label = "Оптимизация O(N^2) циклов джокеров (Stencil/Temperance)", ref_table = QuantumOpt.config, ref_value = "throttle_joker_checks" })
+                create_toggle({ label = "Оптимизация O(N^2) пассивных джокеров (Stencil/Temperance)", ref_table = QuantumOpt.config, ref_value = "throttle_joker_checks" })
             }},
             { n = G.UIT.R, config = { align = "cl", padding = 0.05 }, nodes = {
                 create_toggle({ label = "Фикс смертельного цикла nuGC (главная причина 1 FPS)", ref_table = QuantumOpt.config, ref_value = "fix_nugc" })
             }},
             { n = G.UIT.R, config = { align = "cl", padding = 0.05 }, nodes = {
-                create_toggle({ label = "Thin-Draw и срез шейдеров перекрытых карт (Jokers/Consumeables)", ref_table = QuantumOpt.config, ref_value = "cull_cards" })
+                create_toggle({ label = "Thin-Draw и срез шейдеров перекрытых карт", ref_table = QuantumOpt.config, ref_value = "cull_cards" })
             }},
             { n = G.UIT.R, config = { align = "cl", padding = 0.05 }, nodes = {
                 create_toggle({ label = "Оптимизация обновлений и физики 300+ карт", ref_table = QuantumOpt.config, ref_value = "optimize_cards" })
             }},
             { n = G.UIT.R, config = { align = "cl", padding = 0.05 }, nodes = {
-                create_toggle({ label = "Турбо-подсчет очков (сокращение задержек)", ref_table = QuantumOpt.config, ref_value = "turbo_scoring" })
-            }},
-            { n = G.UIT.R, config = { align = "cl", padding = 0.05 }, nodes = {
-                create_toggle({ label = "Быстрая анимация тикера очков (Fast Easing)", ref_table = QuantumOpt.config, ref_value = "fast_easing" })
+                create_toggle({ label = "Быстрая анимация счетчиков очков (Fast Easing)", ref_table = QuantumOpt.config, ref_value = "fast_easing" })
             }},
             { n = G.UIT.R, config = { align = "cl", padding = 0.05 }, nodes = {
                 create_toggle({ label = "Подавление тряски экрана (Screen Shake)", ref_table = QuantumOpt.config, ref_value = "suppress_jiggle" })
@@ -582,11 +649,8 @@ QuantumOpt.config_tab = function()
             { n = G.UIT.R, config = { align = "cl", padding = 0.05 }, nodes = {
                 create_toggle({ label = "Отображать счетчик FPS на экране", ref_table = QuantumOpt.config, ref_value = "show_fps" })
             }},
-            { n = G.UIT.R, config = { align = "cl", padding = 0.05 }, nodes = {
-                create_toggle({ label = "Мгновенный подсчет Talisman (Disable Anims)", ref_table = QuantumOpt.config, ref_value = "talisman_instant" })
-            }},
         }
     }
 end
 
-sendInfoMessage("QuantumOpt v1.4.0-beta (Rust Core) successfully loaded!", "QuantumOpt")
+sendInfoMessage("QuantumOpt v1.4.0-beta (Instant Scoring & Rust Core) successfully loaded!", "QuantumOpt")
