@@ -47,43 +47,51 @@ local rust_loaded_path = nil
 local function init_rust_core()
     if not QuantumOpt.config.rust_core then return end
 
-    pcall(function()
-        ffi.cdef[[
-            int quantum_init();
-            double quantum_get_time();
+    pcall(ffi.cdef, [[
+        struct TalismanOmega {
+            double asize;
+            double number;
+            int8_t sign;
+            bool _nan;
+            bool _inf;
+        };
+    ]])
 
-            struct TalismanOmega {
-                double asize;
-                double number;
-                int8_t sign;
-                bool _nan;
-                bool _inf;
-            };
+    pcall(ffi.cdef, [[
+        struct CMoveable {
+            float tx, ty, tw, th, tr, tscale;
+            float vtx, vty, vtw, vth, vtr, vtscale;
+            float vx, vy, vr, vscale;
+            bool pinch_x, pinch_y, stationary;
+            float shadow_px, extra_scale, extra_r;
+        };
+    ]])
 
-            void quantum_omega_mul(const struct TalismanOmega* a, const struct TalismanOmega* b, struct TalismanOmega* out);
-            void quantum_omega_add(const struct TalismanOmega* a, const struct TalismanOmega* b, struct TalismanOmega* out);
-            void quantum_omega_pow(const struct TalismanOmega* a, const struct TalismanOmega* b, struct TalismanOmega* out);
-            int quantum_omega_cmp(const struct TalismanOmega* a, const struct TalismanOmega* b);
+    pcall(ffi.cdef, [[
+        struct CRect {
+            float x, y, w, h, r;
+        };
+    ]])
 
-            struct CMoveable {
-                float tx, ty, tw, th, tr, tscale;
-                float vtx, vty, vtw, vth, vtr, vtscale;
-                float vx, vy, vr, vscale;
-                bool pinch_x, pinch_y, stationary;
-                float shadow_px, extra_scale, extra_r;
-            };
+    local cdef_ok, cdef_err = pcall(ffi.cdef, [[
+        int quantum_init();
+        double quantum_get_time();
 
-            void quantum_batch_step_moveables(struct CMoveable* items, size_t count, float dt, float exp_xy, float exp_scale, float exp_r, float max_vel, float room_w);
-            void quantum_step_xy(float tx, float ty, float* vtx, float* vty, float* vx, float* vy, float dt, float exp_xy, float max_vel, bool* out_stationary);
+        void quantum_omega_mul(const struct TalismanOmega* a, const struct TalismanOmega* b, struct TalismanOmega* out);
+        void quantum_omega_add(const struct TalismanOmega* a, const struct TalismanOmega* b, struct TalismanOmega* out);
+        void quantum_omega_pow(const struct TalismanOmega* a, const struct TalismanOmega* b, struct TalismanOmega* out);
+        int quantum_omega_cmp(const struct TalismanOmega* a, const struct TalismanOmega* b);
 
-            struct CRect {
-                float x, y, w, h, r;
-            };
+        void quantum_batch_step_moveables(struct CMoveable* items, size_t count, float dt, float exp_xy, float exp_scale, float exp_r, float max_vel, float room_w);
+        void quantum_step_xy(float tx, float ty, float* vtx, float* vty, float* vx, float* vy, float dt, float exp_xy, float max_vel, bool* out_stationary);
 
-            bool quantum_point_in_rect(const struct CRect* r, float px, float py, float buffer);
-            size_t quantum_batch_point_collision(const struct CRect* rects, size_t count, float px, float py, float buffer, int32_t* out_indices, size_t max_out);
-        ]]
-    end)
+        bool quantum_point_in_rect(const struct CRect* r, float px, float py, float buffer);
+        size_t quantum_batch_point_collision(const struct CRect* rects, size_t count, float px, float py, float buffer, int32_t* out_indices, size_t max_out);
+    ]])
+
+    if not cdef_ok then
+        sendWarnMessage("[QuantumOpt] ffi.cdef error: " .. tostring(cdef_err), "QuantumOpt")
+    end
 
     local candidates = {
         (SMODS and SMODS.current_mod and SMODS.current_mod.path) and (SMODS.current_mod.path .. "libquantum_core.so"),
@@ -100,12 +108,17 @@ local function init_rust_core()
         if path then
             local ok, lib = pcall(ffi.load, path)
             if ok and lib then
-                QuantumLib = lib
-                rust_loaded_path = path
-                rust_active = true
-                pcall(function() QuantumLib.quantum_init() end)
-                sendInfoMessage("[QuantumOpt] Native Rust core loaded successfully from: " .. path, "QuantumOpt")
-                break
+                local sym_ok = pcall(function() return lib.quantum_step_xy ~= nil end)
+                if sym_ok then
+                    QuantumLib = lib
+                    rust_loaded_path = path
+                    rust_active = true
+                    pcall(function() QuantumLib.quantum_init() end)
+                    sendInfoMessage("[QuantumOpt] Native Rust core loaded successfully from: " .. path, "QuantumOpt")
+                    break
+                else
+                    sendWarnMessage("[QuantumOpt] Library found at " .. path .. " but symbol resolution failed.", "QuantumOpt")
+                end
             end
         end
     end
@@ -143,8 +156,8 @@ local function hook_amulet_rust()
             end
             if ffi.istype(TalismanOmega, other) then
                 local out = TalismanOmega()
-                QuantumLib.quantum_omega_mul(self, other, out)
-                return out
+                local ok = pcall(QuantumLib.quantum_omega_mul, self, other, out)
+                if ok then return out end
             end
         end
         return orig_big_mul(self, other)
@@ -154,8 +167,8 @@ local function hook_amulet_rust()
         Big.pow = function(self, other)
             if ffi.istype(TalismanOmega, self) and ffi.istype(TalismanOmega, other) then
                 local out = TalismanOmega()
-                QuantumLib.quantum_omega_pow(self, other, out)
-                return out
+                local ok = pcall(QuantumLib.quantum_omega_pow, self, other, out)
+                if ok then return out end
             end
             return orig_big_pow(self, other)
         end
@@ -165,8 +178,8 @@ local function hook_amulet_rust()
         Big.add = function(self, other)
             if ffi.istype(TalismanOmega, self) and ffi.istype(TalismanOmega, other) then
                 local out = TalismanOmega()
-                QuantumLib.quantum_omega_add(self, other, out)
-                return out
+                local ok = pcall(QuantumLib.quantum_omega_add, self, other, out)
+                if ok then return out end
             end
             return orig_big_add(self, other)
         end
@@ -204,17 +217,19 @@ function Moveable:move_xy(dt)
        (self.T.y ~= self.VT.y or math.abs(self.velocity.y) > 0.01) then
 
         if rust_active and QuantumOpt.config.rust_physics and QuantumLib and G.exp_times then
-            q_vtx[0] = self.VT.x
-            q_vty[0] = self.VT.y
-            q_vx[0] = self.velocity.x
-            q_vy[0] = self.velocity.y
-            QuantumLib.quantum_step_xy(self.T.x, self.T.y, q_vtx, q_vty, q_vx, q_vy, dt, G.exp_times.xy, G.exp_times.max_vel, q_stat)
-            self.VT.x = q_vtx[0]
-            self.VT.y = q_vty[0]
-            self.velocity.x = q_vx[0]
-            self.velocity.y = q_vy[0]
-            self.STATIONARY = q_stat[0]
-            return
+            local ok = pcall(function()
+                q_vtx[0] = self.VT.x
+                q_vty[0] = self.VT.y
+                q_vx[0] = self.velocity.x
+                q_vy[0] = self.velocity.y
+                QuantumLib.quantum_step_xy(self.T.x, self.T.y, q_vtx, q_vty, q_vx, q_vy, dt, G.exp_times.xy, G.exp_times.max_vel, q_stat)
+                self.VT.x = q_vtx[0]
+                self.VT.y = q_vty[0]
+                self.velocity.x = q_vx[0]
+                self.velocity.y = q_vy[0]
+                self.STATIONARY = q_stat[0]
+            end)
+            if ok then return end
         end
 
         return orig_moveable_move_xy(self, dt)
