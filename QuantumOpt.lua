@@ -14,7 +14,6 @@ QuantumOpt = SMODS.current_mod or {}
 local default_config = {
     rust_core = true,           -- Использовать Rust нативную библиотеку libquantum_core.so
     rust_physics = true,        -- Быстрая SIMD физика перемещений карт на Rust
-    rust_bignum = true,         -- Нативное вычисление OmegaNum / Talisman BigNum на Rust
     cache_collisions = true,    -- Кэширование коллизий курсора (устраняет проверку 2000+ узлов при неподвижной мыши)
     throttle_joker_checks = true, -- Устранение O(N^2) циклов джокеров (Temperance, Stencil, Driver's License)
     fix_nugc = true,            -- Устранение смертельного цикла nuGC (full collect при >300MB)
@@ -131,67 +130,7 @@ end
 init_rust_core()
 
 -- =========================================================================
--- 1. RUST BIG-NUM ACCELERATION (TALISMAN / AMULET OMEGANUM)
--- =========================================================================
-local function hook_amulet_rust()
-    if not rust_active or not QuantumLib or not QuantumOpt.config.rust_bignum then return end
-    if not _G.Big or _G.Big._quantum_hooked then return end
-    _G.Big._quantum_hooked = true
-
-    local TalismanOmega = ffi.typeof("struct TalismanOmega")
-    local orig_big_mul = Big.mul
-    local orig_big_pow = Big.pow
-    local orig_big_add = Big.add
-    local orig_big_cmp = Big.cmp
-
-    Big.mul = function(self, other)
-        if ffi.istype(TalismanOmega, self) then
-            if type(other) == "number" then
-                if other == 0 then return B.ZERO end
-                if other == 1 then return self end
-                local on = self.number * other
-                if on == on and on ~= math.huge and on ~= -math.huge then
-                    return Big:create(on)
-                end
-            end
-            if ffi.istype(TalismanOmega, other) then
-                local out = TalismanOmega()
-                local ok = pcall(QuantumLib.quantum_omega_mul, self, other, out)
-                if ok then return out end
-            end
-        end
-        return orig_big_mul(self, other)
-    end
-
-    if orig_big_pow then
-        Big.pow = function(self, other)
-            if ffi.istype(TalismanOmega, self) and ffi.istype(TalismanOmega, other) then
-                local out = TalismanOmega()
-                local ok = pcall(QuantumLib.quantum_omega_pow, self, other, out)
-                if ok then return out end
-            end
-            return orig_big_pow(self, other)
-        end
-    end
-
-    if orig_big_add then
-        Big.add = function(self, other)
-            if ffi.istype(TalismanOmega, self) and ffi.istype(TalismanOmega, other) then
-                local out = TalismanOmega()
-                local ok = pcall(QuantumLib.quantum_omega_add, self, other, out)
-                if ok then return out end
-            end
-            return orig_big_add(self, other)
-        end
-    end
-
-    sendInfoMessage("[QuantumOpt] High-speed Rust OmegaNum math hooked into BigNum/Amulet!", "QuantumOpt")
-end
-
-hook_amulet_rust()
-
--- =========================================================================
--- 2. НЕЙТРАЛИЗАЦИЯ СМЕРТЕЛЬНОГО ЦИКЛА nuGC (ГЛАВНАЯ ПРИЧИНА 1 FPS)
+-- 1. НЕЙТРАЛИЗАЦИЯ СМЕРТЕЛЬНОГО ЦИКЛА nuGC (ГЛАВНАЯ ПРИЧИНА 1 FPS)
 -- =========================================================================
 if QuantumOpt.config.fix_nugc then
     function nuGC(time_budget, memory_ceiling, disable_otherwise)
@@ -509,10 +448,6 @@ local t_eman_ms = 0
 local orig_eman_update = nil
 local orig_game_update = Game.update
 function Game:update(dt)
-    if not _G.Big_quantum_hooked then
-        hook_amulet_rust()
-    end
-
     if LIGHTSPEED and LIGHTSPEED.config and LIGHTSPEED.config.game_speed then
         if cur_upd_ms > 30 and LIGHTSPEED.config.game_speed > 1 then
             LIGHTSPEED.config.game_speed = 1
@@ -616,9 +551,6 @@ QuantumOpt.config_tab = function()
             }},
             { n = G.UIT.R, config = { align = "cl", padding = 0.05 }, nodes = {
                 create_toggle({ label = "Rust Core (libquantum_core.so вычисления)", ref_table = QuantumOpt.config, ref_value = "rust_core" })
-            }},
-            { n = G.UIT.R, config = { align = "cl", padding = 0.05 }, nodes = {
-                create_toggle({ label = "Rust BigNum ускорение (Talisman / OmegaNum)", ref_table = QuantumOpt.config, ref_value = "rust_bignum" })
             }},
             { n = G.UIT.R, config = { align = "cl", padding = 0.05 }, nodes = {
                 create_toggle({ label = "Rust SIMD физика перемещения карт", ref_table = QuantumOpt.config, ref_value = "rust_physics" })
